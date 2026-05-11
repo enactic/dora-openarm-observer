@@ -25,54 +25,25 @@ import time
 def _build_output(observation, phase_classifier_result, metadata):
     """Convert observation to Apache Arrow data and fill metadata.
 
-    --arms=right,left case:
+    observation keys (all values are dora events with a "value" field):
+      "arm_right"          – pa.array float32, len 8 (7 joints + 1 gripper)
+      "arm_left"           – pa.array float32, len 8
+      "camera_wrist_right" – JPEG-encoded uint8 flat array, 960×600
+      "camera_wrist_left"  – JPEG-encoded uint8 flat array, 960×600
+      "camera_head_left"   – JPEG-encoded uint8 flat array, 1280×720
+      "camera_head_right"  – JPEG-encoded uint8 flat array, 1280×720
+      "camera_ceiling"     – JPEG-encoded uint8 flat array, 960×600
 
-    observation: {
-      # len: 8 (7 joints + 1 gripper)
-      "arm_right": {"value": pa.array([...], type=pa.float32())},
-      # len: ?, encoding: JPEG, width: 960, height: 600
-      "camera_wrist_right": {"value": pa.array([...], type=pa.uint8())},
-      # len: 8 (7 joints + 1 gripper)
-      "arm_left": {"value": pa.array([...], type=pa.float32())},
-      # len: ?, encoding: JPEG, width: 960, height: 600
-      "camera_wrist_left": {"value": pa.array([...], type=pa.uint8())},
-      # len: ?, encoding: JPEG, width: 960, height: 600
-      "camera_head": {"value": pa.array([...], type=pa.uint8())},
-      # len: ?, encoding: JPEG, width: 960, height: 600
-      "camera_ceiling": {"value": pa.array([...], type=pa.uint8())},
-    }
+    Output pa.StructArray fields:
+      "position"           – concatenated arm positions, list<float32>
+      "camera_wrist_right" – decoded RGB flat array, list<uint8>
+      "camera_wrist_left"  – decoded RGB flat array, list<uint8>
+      "camera_head_left"   – decoded RGB flat array, list<uint8>
+      "camera_head_right"  – decoded RGB flat array, list<uint8>
+      "camera_ceiling"     – decoded RGB flat array, list<uint8>
+      "phase_classifier_result" – StructArray or null
 
-    phase_classifier_result: {
-      "value": pa.StructArray: {
-        "phase": pa.int32(),
-        "phase_name": pa.string(),
-        "confidence": pa.float32(),
-        "success": pa.bool_(),
-        "status": pa.string(),
-      },
-    }
-
-    ->
-
-    pa.StructArray: {
-      # element len: 8 (7 joints + 1 gripper) * 2 (right + left)
-      # "arm_right" + "arm_left"
-      "position": pa.list_(pa.float32()),
-      # element len: 600 (height) * 960 (width) * 3 (RGB)
-      # element shape: (height, width, color)
-      "camera_wrist_right": pa.list_(pa.uint8()),
-      # element len: 600 (height) * 960 (width) * 3 (RGB)
-      # element shape: (height, width, color)
-      "camera_wrist_left": pa.list_(pa.uint8()),
-      # element len: 600 (height) * 960 (width) * 3 (RGB)
-      # element shape: (height, width, color)
-      "camera_head": pa.list_(pa.uint8()),
-      # element len: 600 (height) * 960 (width) * 3 (RGB)
-      # element shape: (height, width, color)
-      "camera_ceiling": pa.list_(pa.uint8()),
-      # Use the given phase_classifier_result as-is
-      "phase_classifier_result": pa.StructArray() or pa.null(),
-    }
+    metadata is mutated to add per-camera height/width/encoding keys.
     """
     arrays = []
     names = []
@@ -105,7 +76,8 @@ def _build_output(observation, phase_classifier_result, metadata):
         add_camera_observation("camera_wrist_right")
     if "camera_wrist_left" in observation:
         add_camera_observation("camera_wrist_left")
-    add_camera_observation("camera_head")
+    add_camera_observation("camera_head_left")
+    add_camera_observation("camera_head_right")
     add_camera_observation("camera_ceiling")
     if phase_classifier_result is None:
         arrays.append(pa.array([None]))
@@ -134,7 +106,8 @@ def main():
     if "left" in arms:
         observation["arm_left"] = None
         observation["camera_wrist_left"] = None
-    observation["camera_head"] = None
+    observation["camera_head_left"] = None
+    observation["camera_head_right"] = None
     observation["camera_ceiling"] = None
     episode_number = 0
     last_phase_classifier_result = None
@@ -152,12 +125,12 @@ def main():
                 "episode_number": episode_number,
                 "timestamp": time.time_ns(),
             }
-            arrow_ovservation = _build_output(
+            arrow_observation = _build_output(
                 observation, last_phase_classifier_result, metadata
             )
             node.send_output(
                 "observation",
-                arrow_ovservation,
+                arrow_observation,
                 metadata,
             )
         elif event_id == "command":
