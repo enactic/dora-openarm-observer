@@ -114,7 +114,7 @@ def main():
     observation["camera_ceiling"] = None
     episode_number = 0
     last_phase_classifier_result = None
-    last_task_prompt = None   # None until UI explicitly sets one
+    last_task_prompt = None
     for event in node:
         if event["type"] != "INPUT":
             continue
