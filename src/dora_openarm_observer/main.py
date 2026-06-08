@@ -22,7 +22,7 @@ import pyarrow as pa
 import time
 
 
-def _build_output(observation, phase_classifier_result, metadata):
+def _build_output(observation, phase_classifier_result, task_prompt, metadata):
     """Convert observation to Apache Arrow data and fill metadata.
 
     observation keys (all values are dora events with a "value" field):
@@ -42,6 +42,7 @@ def _build_output(observation, phase_classifier_result, metadata):
       "camera_head_right"  – decoded RGB flat array, list<uint8>
       "camera_ceiling"     – decoded RGB flat array, list<uint8>
       "phase_classifier_result" – StructArray or null
+      "task_prompt"        – string (language instruction for the policy)
 
     metadata is mutated to add per-camera height/width/encoding keys.
     """
@@ -84,6 +85,8 @@ def _build_output(observation, phase_classifier_result, metadata):
     else:
         arrays.append(phase_classifier_result)
     names.append("phase_classifier_result")
+    arrays.append(pa.array([task_prompt], type=pa.string()))
+    names.append("task_prompt")
     return pa.StructArray.from_arrays(arrays, names)
 
 
@@ -111,6 +114,7 @@ def main():
     observation["camera_ceiling"] = None
     episode_number = 0
     last_phase_classifier_result = None
+    last_task_prompt = None
     for event in node:
         if event["type"] != "INPUT":
             continue
@@ -126,7 +130,7 @@ def main():
                 "timestamp": time.time_ns(),
             }
             arrow_observation = _build_output(
-                observation, last_phase_classifier_result, metadata
+                observation, last_phase_classifier_result, last_task_prompt, metadata
             )
             node.send_output(
                 "observation",
@@ -139,6 +143,8 @@ def main():
                 episode_number = event["metadata"].get("episode_number", 0)
         elif event_id == "phase_classifier_result":
             last_phase_classifier_result = event["value"]
+        elif event_id == "task_prompt":
+            last_task_prompt = event["value"][0].as_py()
         else:
             observation[event_id] = event
 
