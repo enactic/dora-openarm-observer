@@ -33,6 +33,7 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
       "camera_head_left"   – JPEG-encoded uint8 flat array, 1280×720
       "camera_head_right"  – JPEG-encoded uint8 flat array, 1280×720
       "camera_ceiling"     – JPEG-encoded uint8 flat array, 960×600
+      "observation_id"     – int64, incremented for each observation
 
     Output pa.StructArray fields:
       "position"           – concatenated arm positions, list<float32>
@@ -43,6 +44,7 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
       "camera_ceiling"     – decoded RGB flat array, list<uint8>
       "phase_classifier_result" – StructArray or null
       "task_prompt"        – string (language instruction for the policy)
+      "observation_id"     – int64, incremented for each observation
 
     metadata is mutated to add per-camera height/width/encoding keys.
     """
@@ -87,6 +89,8 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
     names.append("phase_classifier_result")
     arrays.append(pa.array([task_prompt], type=pa.string()))
     names.append("task_prompt")
+    arrays.append(pa.array([observation["observation_id"]], type=pa.int64()))
+    names.append("observation_id")
     return pa.StructArray.from_arrays(arrays, names)
 
 
@@ -112,6 +116,7 @@ def main():
     observation["camera_head_left"] = None
     observation["camera_head_right"] = None
     observation["camera_ceiling"] = None
+    observation["observation_id"] = 0
     episode_number = 0
     last_phase_classifier_result = None
     last_task_prompt = None
@@ -130,6 +135,7 @@ def main():
             if ("right" in arms and last_arm_right_status == "stopped") or (
                 "left" in arms and last_arm_left_status == "stopped"
             ):
+                observation["observation_id"] = 0
                 continue
             metadata = {
                 "episode_number": episode_number,
@@ -138,6 +144,7 @@ def main():
             arrow_observation = _build_output(
                 observation, last_phase_classifier_result, last_task_prompt, metadata
             )
+            observation["observation_id"] += 1
 
             node.send_output(
                 "observation",
