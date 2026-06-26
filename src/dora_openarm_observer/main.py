@@ -22,6 +22,20 @@ import pyarrow as pa
 import time
 
 
+def _reset_observation(observation, arms):
+    """Initialize/reset observations to None and observation_id to 0."""
+    if "right" in arms:
+        observation["arm_right"] = None
+        observation["camera_wrist_right"] = None
+    if "left" in arms:
+        observation["arm_left"] = None
+        observation["camera_wrist_left"] = None
+    observation["camera_head_left"] = None
+    observation["camera_head_right"] = None
+    observation["camera_ceiling"] = None
+    observation["observation_id"] = 0
+
+
 def _build_output(observation, phase_classifier_result, task_prompt, metadata):
     """Convert observation to Apache Arrow data and fill metadata.
 
@@ -107,16 +121,7 @@ def main():
     arms = args.arms.split(",")
     node = dora.Node()
     observation = {}
-    if "right" in arms:
-        observation["arm_right"] = None
-        observation["camera_wrist_right"] = None
-    if "left" in arms:
-        observation["arm_left"] = None
-        observation["camera_wrist_left"] = None
-    observation["camera_head_left"] = None
-    observation["camera_head_right"] = None
-    observation["camera_ceiling"] = None
-    observation["observation_id"] = 0
+    _reset_observation(observation, arms)
     episode_number = 0
     last_phase_classifier_result = None
     last_task_prompt = None
@@ -133,10 +138,12 @@ def main():
             if any(v is None for v in observation.values()):
                 # If any observation isn't ready yet, we skip this tick.
                 continue
-            if ("right" in arms and last_arm_right_status == "stopped") or (
-                "left" in arms and last_arm_left_status == "stopped"
-                ) or command_status == "stopped":
-                observation["observation_id"] = 0
+            if (
+                ("right" in arms and last_arm_right_status == "stopped")
+                or ("left" in arms and last_arm_left_status == "stopped")
+                or command_status == "stopped"
+            ):
+                _reset_observation(observation, arms)
                 continue
             metadata = {
                 "episode_number": episode_number,
@@ -151,8 +158,8 @@ def main():
                 metadata,
             )
             observation["observation_id"] += 1
-        elif event_id == "command": 
-            command_status = event["value"][0].as_py() # started, stopped, aligned
+        elif event_id == "command":
+            command_status = event["value"][0].as_py()  # started, stopped, aligned
         elif event_id == "arm_right_status":
             last_arm_right_status = event["value"][0].as_py()
         elif event_id == "arm_left_status":
