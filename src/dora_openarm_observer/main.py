@@ -122,6 +122,7 @@ def main():
     last_task_prompt = None
     last_arm_right_status = None
     last_arm_left_status = None
+    command_status = "stopped"
     for event in node:
         if event["type"] != "INPUT":
             continue
@@ -134,7 +135,7 @@ def main():
                 continue
             if ("right" in arms and last_arm_right_status == "stopped") or (
                 "left" in arms and last_arm_left_status == "stopped"
-            ):
+                ) or command_status == "stopped":
                 observation["observation_id"] = 0
                 continue
             metadata = {
@@ -150,9 +151,8 @@ def main():
                 metadata,
             )
             observation["observation_id"] += 1
-        elif event_id == "command":
-            if event["value"][0].as_py() == "start":
-                episode_number = event["metadata"].get("episode_number", 0)
+        elif event_id == "command": 
+            command_status = event["value"][0].as_py() # started, stopped, aligned
         elif event_id == "arm_right_status":
             last_arm_right_status = event["value"][0].as_py()
         elif event_id == "arm_left_status":
