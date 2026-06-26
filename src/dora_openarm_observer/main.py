@@ -144,13 +144,12 @@ def main():
             arrow_observation = _build_output(
                 observation, last_phase_classifier_result, last_task_prompt, metadata
             )
-            observation["observation_id"] += 1
-
             node.send_output(
                 "observation",
                 arrow_observation,
                 metadata,
             )
+            observation["observation_id"] += 1
         elif event_id == "command":
             if event["value"][0].as_py() == "start":
                 episode_number = event["metadata"].get("episode_number", 0)
