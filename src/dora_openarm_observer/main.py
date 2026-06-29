@@ -22,6 +22,20 @@ import pyarrow as pa
 import time
 
 
+def _reset_observation(observation, arms):
+    """Initialize/reset observations to None and observation_id to 0."""
+    if "right" in arms:
+        observation["arm_right"] = None
+        observation["camera_wrist_right"] = None
+    if "left" in arms:
+        observation["arm_left"] = None
+        observation["camera_wrist_left"] = None
+    observation["camera_head_left"] = None
+    observation["camera_head_right"] = None
+    observation["camera_ceiling"] = None
+    observation["observation_id"] = 0
+
+
 def _build_output(observation, phase_classifier_result, task_prompt, metadata):
     """Convert observation to Apache Arrow data and fill metadata.
 
@@ -33,6 +47,7 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
       "camera_head_left"   – JPEG-encoded uint8 flat array, 1280×720
       "camera_head_right"  – JPEG-encoded uint8 flat array, 1280×720
       "camera_ceiling"     – JPEG-encoded uint8 flat array, 960×600
+      "observation_id"     – int64, incremented for each observation
 
     Output pa.StructArray fields:
       "position"           – concatenated arm positions, list<float32>
@@ -43,6 +58,7 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
       "camera_ceiling"     – decoded RGB flat array, list<uint8>
       "phase_classifier_result" – StructArray or null
       "task_prompt"        – string (language instruction for the policy)
+      "observation_id"     – int64, incremented for each observation
 
     metadata is mutated to add per-camera height/width/encoding keys.
     """
@@ -87,6 +103,8 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
     names.append("phase_classifier_result")
     arrays.append(pa.array([task_prompt], type=pa.string()))
     names.append("task_prompt")
+    arrays.append(pa.array([observation["observation_id"]], type=pa.int64()))
+    names.append("observation_id")
     return pa.StructArray.from_arrays(arrays, names)
 
 
@@ -103,20 +121,13 @@ def main():
     arms = args.arms.split(",")
     node = dora.Node()
     observation = {}
-    if "right" in arms:
-        observation["arm_right"] = None
-        observation["camera_wrist_right"] = None
-    if "left" in arms:
-        observation["arm_left"] = None
-        observation["camera_wrist_left"] = None
-    observation["camera_head_left"] = None
-    observation["camera_head_right"] = None
-    observation["camera_ceiling"] = None
+    _reset_observation(observation, arms)
     episode_number = 0
     last_phase_classifier_result = None
     last_task_prompt = None
     last_arm_right_status = None
     last_arm_left_status = None
+    command_status = "stopped"
     for event in node:
         if event["type"] != "INPUT":
             continue
@@ -127,9 +138,12 @@ def main():
             if any(v is None for v in observation.values()):
                 # If any observation isn't ready yet, we skip this tick.
                 continue
-            if ("right" in arms and last_arm_right_status == "stopped") or (
-                "left" in arms and last_arm_left_status == "stopped"
+            if (
+                ("right" in arms and last_arm_right_status == "stopped")
+                or ("left" in arms and last_arm_left_status == "stopped")
+                or command_status == "stopped"
             ):
+                _reset_observation(observation, arms)
                 continue
             metadata = {
                 "episode_number": episode_number,
@@ -138,15 +152,14 @@ def main():
             arrow_observation = _build_output(
                 observation, last_phase_classifier_result, last_task_prompt, metadata
             )
-
             node.send_output(
                 "observation",
                 arrow_observation,
                 metadata,
             )
+            observation["observation_id"] += 1
         elif event_id == "command":
-            if event["value"][0].as_py() == "start":
-                episode_number = event["metadata"].get("episode_number", 0)
+            command_status = event["value"][0].as_py()  # started, stopped, aligned
         elif event_id == "arm_right_status":
             last_arm_right_status = event["value"][0].as_py()
         elif event_id == "arm_left_status":
