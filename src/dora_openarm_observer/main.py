@@ -23,7 +23,7 @@ import time
 
 
 def _reset_observation(observation, arms):
-    """Initialize/reset observations to None and id to 0."""
+    """Initialize/reset observations to None and ID to 0."""
     if "right" in arms:
         observation["arm_right"] = None
         observation["camera_wrist_right"] = None
@@ -47,7 +47,7 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
       "camera_head_left"   – JPEG-encoded uint8 flat array, 1280×720
       "camera_head_right"  – JPEG-encoded uint8 flat array, 1280×720
       "camera_ceiling"     – JPEG-encoded uint8 flat array, 960×600
-      "id"     – int64, incremented for each observation
+      "id"                 – int64, incremented for each observation
 
     Output pa.StructArray fields:
       "position"           – concatenated arm positions, list<float32>
@@ -58,7 +58,7 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
       "camera_ceiling"     – decoded RGB flat array, list<uint8>
       "phase_classifier_result" – StructArray or null
       "task_prompt"        – string (language instruction for the policy)
-      "id"     – int64, incremented for each observation
+      "id"                 – int64, incremented for each observation
 
     metadata is mutated to add per-camera height/width/encoding keys.
     """
