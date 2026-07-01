@@ -24,24 +24,6 @@ import dora
 import pyarrow as pa
 
 
-START_COMMANDS = {
-    "start",
-    "started",
-    "aligned",
-}
-STOP_COMMANDS = {
-    "stop",
-    "stop_arm",
-    "pause",
-    "cancel",
-    "success",
-    "fail",
-    "intervene",
-    "quit",
-    "stopped",
-}
-
-
 def _reset_observation(observation, arms):
     """Initialize/reset observations to None and ID to 0."""
     if "right" in arms:
@@ -197,12 +179,12 @@ def main():
     _reset_observation(observation, arms)
     episode_number = 0
     inference_trial_id = 0
-    episode_active = False
     policy_history = deque()
     last_phase_classifier_result = None
     last_task_prompt = None
     last_arm_right_status = None
     last_arm_left_status = None
+    command_status = None
     for event in node:
         if event["type"] != "INPUT":
             continue
@@ -216,7 +198,7 @@ def main():
             if (
                 ("right" in arms and last_arm_right_status == "stopped")
                 or ("left" in arms and last_arm_left_status == "stopped")
-                or not episode_active
+                or command_status == "stopped"
             ):
                 _reset_observation(observation, arms)
                 policy_history.clear()
@@ -259,19 +241,7 @@ def main():
             )
             observation["id"] += 1
         elif event_id == "command":
-            command = event["value"][0].as_py()
-            if command in START_COMMANDS:
-                episode_active = True
-                episode_number = _metadata_int(
-                    event["metadata"], "episode_number", episode_number
-                )
-                policy_history.clear()
-                _reset_observation(observation, arms)
-            elif command in STOP_COMMANDS:
-                episode_active = False
-                inference_trial_id = (inference_trial_id + 1) % (2**63 - 1)
-                policy_history.clear()
-                _reset_observation(observation, arms)
+            command_status = event["value"][0].as_py()
         elif event_id == "arm_right_status":
             last_arm_right_status = event["value"][0].as_py()
         elif event_id == "arm_left_status":
