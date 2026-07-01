@@ -15,7 +15,7 @@
 """Node to collect the last observation."""
 
 import argparse
-from collections import deque
+from collections import deque, namedtuple
 import os
 import time
 
@@ -121,20 +121,53 @@ def _parse_delta_indices(text):
     return tuple(delta_indices)
 
 
-def _build_policy_output(policy_history, latest_timestamp, delta_indices, history_hz):
-    selected = []
-    selected_timestamps = []
-    for delta_index in delta_indices:
-        target_timestamp = latest_timestamp + int(
-            delta_index / history_hz * 1_000_000_000
+NANOSECONDS_PER_SECOND = 1_000_000_000
+
+# Extra window kept beyond the oldest requested delta so the nearest-neighbour
+# search in PolicyHistory.select always has candidates surrounding each target.
+HISTORY_RETENTION_MARGIN_S = 0.1
+
+HistoryItem = namedtuple("HistoryItem", ["timestamp", "arrow"])
+
+
+class PolicyHistory:
+    """Bounded time-window buffer of observations sampled by delta index."""
+
+    def __init__(self, hz, delta_indices):
+        """Store the sampling rate and delta indices, and size the window."""
+        self._hz = hz
+        self._delta_indices = delta_indices
+        self._keep_ns = int(
+            (abs(min(delta_indices)) / hz + HISTORY_RETENTION_MARGIN_S)
+            * NANOSECONDS_PER_SECOND
         )
-        item = min(
-            policy_history,
-            key=lambda history_item: abs(history_item["timestamp"] - target_timestamp),
-        )
-        selected.append(item["arrow"])
-        selected_timestamps.append(item["timestamp"])
-    return pa.concat_arrays(selected), selected_timestamps
+        self._items = deque()
+
+    def append(self, timestamp, arrow):
+        """Add an observation and drop entries older than the retention window."""
+        self._items.append(HistoryItem(timestamp, arrow))
+        while self._items and self._items[0].timestamp < timestamp - self._keep_ns:
+            self._items.popleft()
+
+    def select(self, latest_timestamp):
+        """Return (concatenated arrow, timestamps) nearest each delta index."""
+        selected = []
+        selected_timestamps = []
+        for delta_index in self._delta_indices:
+            target_timestamp = latest_timestamp + int(
+                delta_index / self._hz * NANOSECONDS_PER_SECOND
+            )
+            item = min(
+                self._items,
+                key=lambda history_item: abs(history_item.timestamp - target_timestamp),
+            )
+            selected.append(item.arrow)
+            selected_timestamps.append(item.timestamp)
+        return pa.concat_arrays(selected), selected_timestamps
+
+    def clear(self):
+        """Drop all buffered observations."""
+        self._items.clear()
 
 
 def main():
@@ -163,16 +196,13 @@ def main():
     if args.policy_history_hz <= 0:
         raise ValueError("--policy-history-hz must be positive")
     policy_delta_indices = _parse_delta_indices(args.policy_history_delta_indices)
-    history_keep_ns = int(
-        (abs(min(policy_delta_indices)) / args.policy_history_hz + 0.1) * 1_000_000_000
-    )
 
     node = dora.Node()
     observation = {}
     _reset_observation(observation, arms)
     episode_number = 0
     inference_trial_id = 0
-    policy_history = deque()
+    policy_history = PolicyHistory(args.policy_history_hz, policy_delta_indices)
     last_phase_classifier_result = None
     last_task_prompt = None
     last_arm_right_status = None
@@ -206,23 +236,9 @@ def main():
             arrow_observation = _build_output(
                 observation, last_phase_classifier_result, last_task_prompt, metadata
             )
-            policy_history.append(
-                {
-                    "timestamp": metadata["timestamp"],
-                    "arrow": arrow_observation,
-                }
-            )
-            while (
-                policy_history
-                and policy_history[0]["timestamp"]
-                < metadata["timestamp"] - history_keep_ns
-            ):
-                policy_history.popleft()
-            history_observation, history_timestamps = _build_policy_output(
-                policy_history,
-                metadata["timestamp"],
-                policy_delta_indices,
-                args.policy_history_hz,
+            policy_history.append(metadata["timestamp"], arrow_observation)
+            history_observation, history_timestamps = policy_history.select(
+                metadata["timestamp"]
             )
             metadata["history_timestamps"] = ",".join(
                 str(ts) for ts in history_timestamps
