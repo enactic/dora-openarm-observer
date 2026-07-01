@@ -137,13 +137,6 @@ def _build_policy_output(policy_history, latest_timestamp, delta_indices, histor
     return pa.concat_arrays(selected), selected_timestamps
 
 
-def _metadata_int(metadata, key, default):
-    try:
-        return int(metadata.get(key, default))
-    except (TypeError, ValueError):
-        return default
-
-
 def main():
     """Collect the last observation."""
     parser = argparse.ArgumentParser(description="Collect the last observation")
