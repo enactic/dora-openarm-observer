@@ -184,7 +184,7 @@ def main():
     last_task_prompt = None
     last_arm_right_status = None
     last_arm_left_status = None
-    command_status = None
+    command_status = "stopped" 
     for event in node:
         if event["type"] != "INPUT":
             continue
