@@ -15,11 +15,13 @@
 """Node to collect the last observation."""
 
 import argparse
+from collections import deque, namedtuple
+import os
+import time
+
 import cv2
 import dora
-import os
 import pyarrow as pa
-import time
 
 
 def _reset_observation(observation, arms):
@@ -108,6 +110,66 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
     return pa.StructArray.from_arrays(arrays, names)
 
 
+def _parse_delta_indices(text):
+    delta_indices = []
+    for part in text.split(","):
+        part = part.strip()
+        if part:
+            delta_indices.append(int(part))
+    if not delta_indices:
+        raise ValueError("at least one policy history delta index is required")
+    return tuple(delta_indices)
+
+
+NANOSECONDS_PER_SECOND = 1_000_000_000
+
+# Extra window kept beyond the oldest requested delta so the nearest-neighbour
+# search in PolicyHistory.select always has candidates surrounding each target.
+HISTORY_RETENTION_MARGIN_S = 0.1
+
+HistoryItem = namedtuple("HistoryItem", ["timestamp", "arrow"])
+
+
+class PolicyHistory:
+    """Bounded time-window buffer of observations sampled by delta index."""
+
+    def __init__(self, hz, delta_indices):
+        """Store the sampling rate and delta indices, and size the window."""
+        self._hz = hz
+        self._delta_indices = delta_indices
+        self._keep_ns = int(
+            (abs(min(delta_indices)) / hz + HISTORY_RETENTION_MARGIN_S)
+            * NANOSECONDS_PER_SECOND
+        )
+        self._items = deque()
+
+    def append(self, timestamp, arrow):
+        """Add an observation and drop entries older than the retention window."""
+        self._items.append(HistoryItem(timestamp, arrow))
+        while self._items and self._items[0].timestamp < timestamp - self._keep_ns:
+            self._items.popleft()
+
+    def select(self, latest_timestamp):
+        """Return (concatenated arrow, timestamps) nearest each delta index."""
+        selected = []
+        selected_timestamps = []
+        for delta_index in self._delta_indices:
+            target_timestamp = latest_timestamp + int(
+                delta_index / self._hz * NANOSECONDS_PER_SECOND
+            )
+            item = min(
+                self._items,
+                key=lambda history_item: abs(history_item.timestamp - target_timestamp),
+            )
+            selected.append(item.arrow)
+            selected_timestamps.append(item.timestamp)
+        return pa.concat_arrays(selected), selected_timestamps
+
+    def clear(self):
+        """Drop all buffered observations."""
+        self._items.clear()
+
+
 def main():
     """Collect the last observation."""
     parser = argparse.ArgumentParser(description="Collect the last observation")
@@ -117,12 +179,30 @@ def main():
         help="The used arms: 'right,left' (default), 'right' or 'left'",
         type=str,
     )
+    parser.add_argument(
+        "--policy-history-hz",
+        default=float(os.getenv("POLICY_HISTORY_HZ", "30.0")),
+        help="History sampling rate used to interpret policy history delta indices",
+        type=float,
+    )
+    parser.add_argument(
+        "--policy-history-delta-indices",
+        default=os.getenv("POLICY_HISTORY_DELTA_INDICES", "0"),
+        help="Comma-separated history offsets to send to the policy, e.g. '-32,0'",
+        type=str,
+    )
     args = parser.parse_args()
     arms = args.arms.split(",")
+    if args.policy_history_hz <= 0:
+        raise ValueError("--policy-history-hz must be positive")
+    policy_delta_indices = _parse_delta_indices(args.policy_history_delta_indices)
+
     node = dora.Node()
     observation = {}
     _reset_observation(observation, arms)
     episode_number = 0
+    inference_trial_id = 0
+    policy_history = PolicyHistory(args.policy_history_hz, policy_delta_indices)
     last_phase_classifier_result = None
     last_task_prompt = None
     last_arm_right_status = None
@@ -144,22 +224,33 @@ def main():
                 or command_status == "stopped"
             ):
                 _reset_observation(observation, arms)
+                policy_history.clear()
                 continue
             metadata = {
                 "episode_number": episode_number,
+                "inference_trial_id": inference_trial_id,
                 "timestamp": time.time_ns(),
+                "history_hz": args.policy_history_hz,
+                "history_delta_indices": ",".join(str(i) for i in policy_delta_indices),
             }
             arrow_observation = _build_output(
                 observation, last_phase_classifier_result, last_task_prompt, metadata
             )
+            policy_history.append(metadata["timestamp"], arrow_observation)
+            history_observation, history_timestamps = policy_history.select(
+                metadata["timestamp"]
+            )
+            metadata["history_timestamps"] = ",".join(
+                str(ts) for ts in history_timestamps
+            )
             node.send_output(
                 "observation",
-                arrow_observation,
+                history_observation,
                 metadata,
             )
             observation["id"] += 1
         elif event_id == "command":
-            command_status = event["value"][0].as_py()  # started, stopped, aligned
+            command_status = event["value"][0].as_py()
         elif event_id == "arm_right_status":
             last_arm_right_status = event["value"][0].as_py()
         elif event_id == "arm_left_status":
