@@ -15,6 +15,7 @@
 """Node to collect the last observation."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import cv2
 import dora
 import os
@@ -36,7 +37,16 @@ def _reset_observation(observation, arms):
     observation["id"] = 0
 
 
-def _build_output(observation, phase_classifier_result, task_prompt, metadata):
+def _decode_camera(encoded):
+    image = cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise ValueError("Failed to decode JPEG camera observation")
+    return image
+
+
+def _build_output(
+    observation, phase_classifier_result, task_prompt, metadata, decode_pool
+):
     """Convert observation to Apache Arrow data and fill metadata.
 
     observation keys (all values are dora events with a "value" field):
@@ -76,12 +86,22 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
     )
     names.append("position")
 
-    def add_camera_observation(name):
-        camera = observation[name]
-        image = cv2.imdecode(
-            camera["value"].to_numpy(),
-            cv2.IMREAD_UNCHANGED,
+    camera_names = []
+    if "camera_wrist_right" in observation:
+        camera_names.append("camera_wrist_right")
+    if "camera_wrist_left" in observation:
+        camera_names.append("camera_wrist_left")
+    camera_names.extend(["camera_head_left", "camera_head_right", "camera_ceiling"])
+    decode_futures = {
+        name: decode_pool.submit(
+            _decode_camera,
+            observation[name]["value"].to_numpy(),
         )
+        for name in camera_names
+    }
+
+    def add_camera_observation(name):
+        image = decode_futures[name].result()
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         metadata[f"{name}.encoding"] = "rgb8"
         metadata[f"{name}.height"] = image.shape[0]
@@ -89,13 +109,8 @@ def _build_output(observation, phase_classifier_result, task_prompt, metadata):
         arrays.append(pa.array([image.ravel()], type=pa.list_(pa.uint8())))
         names.append(name)
 
-    if "camera_wrist_right" in observation:
-        add_camera_observation("camera_wrist_right")
-    if "camera_wrist_left" in observation:
-        add_camera_observation("camera_wrist_left")
-    add_camera_observation("camera_head_left")
-    add_camera_observation("camera_head_right")
-    add_camera_observation("camera_ceiling")
+    for name in camera_names:
+        add_camera_observation(name)
     if phase_classifier_result is None:
         arrays.append(pa.array([None]))
     else:
@@ -117,11 +132,25 @@ def main():
         help="The used arms: 'right,left' (default), 'right' or 'left'",
         type=str,
     )
+    parser.add_argument(
+        "--decode-workers",
+        default=int(os.getenv("OBSERVER_DECODE_WORKERS", "3")),
+        type=int,
+        help="Number of persistent JPEG decode workers (default: 3)",
+    )
     args = parser.parse_args()
+    if args.decode_workers <= 0:
+        raise ValueError("--decode-workers must be positive")
+
     arms = args.arms.split(",")
     node = dora.Node()
     observation = {}
     _reset_observation(observation, arms)
+    cv2.setNumThreads(1)
+    decode_pool = ThreadPoolExecutor(
+        max_workers=args.decode_workers,
+        thread_name_prefix="observer-jpeg",
+    )
     episode_number = 0
     last_phase_classifier_result = None
     last_task_prompt = None
@@ -150,7 +179,11 @@ def main():
                 "timestamp": time.time_ns(),
             }
             arrow_observation = _build_output(
-                observation, last_phase_classifier_result, last_task_prompt, metadata
+                observation,
+                last_phase_classifier_result,
+                last_task_prompt,
+                metadata,
+                decode_pool,
             )
             node.send_output(
                 "observation",
@@ -170,6 +203,8 @@ def main():
             last_task_prompt = event["value"][0].as_py()
         else:
             observation[event_id] = event
+
+    decode_pool.shutdown(wait=True)
 
 
 if __name__ == "__main__":
