@@ -134,9 +134,9 @@ def main():
     )
     parser.add_argument(
         "--decode-workers",
-        default=int(os.getenv("OBSERVER_DECODE_WORKERS", "3")),
+        default=int(os.getenv("OBSERVER_DECODE_WORKERS", "4")),
         type=int,
-        help="Number of persistent JPEG decode workers (default: 3)",
+        help="Number of persistent JPEG decode workers (default: 4)",
     )
     args = parser.parse_args()
     if args.decode_workers <= 0:
