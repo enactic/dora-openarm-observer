@@ -210,6 +210,8 @@ def main():
             elif event_id == "command":
                 # started, stopped, aligned
                 command_status = event["value"][0].as_py()
+                if command_status == "start":
+                    episode_number = event["metadata"].get("episode_number", 0)
             elif event_id == "arm_right_status":
                 last_arm_right_status = event["value"][0].as_py()
             elif event_id == "arm_left_status":
