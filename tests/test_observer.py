@@ -66,3 +66,33 @@ def test_parallel_decode_preserves_mainline_output_format():
     assert metadata["camera_ceiling.encoding"] == "rgb8"
     assert metadata["camera_ceiling.height"] == 2
     assert metadata["camera_ceiling.width"] == 3
+
+
+def _qpos_event(values):
+    return {
+        "value": pa.array(
+            [{"qpos": values}],
+            type=pa.struct([("qpos", pa.list_(pa.float32()))]),
+        )
+    }
+
+
+def test_struct_qpos_arm_observation():
+    """Arm observations in the struct{qpos} format are flattened into position."""
+    observation = {
+        "arm_right": _qpos_event([1.0, 2.0]),
+        "arm_left": {"value": pa.array([3.0, 4.0], type=pa.float32())},
+        "camera_wrist_right": _camera_event(10),
+        "camera_wrist_left": _camera_event(20),
+        "camera_head_left": _camera_event(30),
+        "camera_head_right": _camera_event(40),
+        "camera_ceiling": _camera_event(50),
+        "id": 7,
+    }
+    metadata = {}
+
+    with ThreadPoolExecutor(max_workers=3) as decode_pool:
+        output = _build_output(observation, None, "pick", metadata, decode_pool)
+
+    assert output.field("position").to_pylist() == [[1.0, 2.0, 3.0, 4.0]]
+    assert output.field("position").type == pa.list_(pa.float32())
