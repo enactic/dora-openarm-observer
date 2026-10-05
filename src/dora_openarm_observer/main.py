@@ -211,7 +211,8 @@ def main():
                 last_phase_classifier_result = event["value"]
             elif event_id == "task_prompt":
                 last_task_prompt = event["value"][0].as_py()
-            else:
+            elif event_id != "id" and event_id in observation:
+                # Inputs for unused arms are ignored.
                 observation[event_id] = event
     finally:
         decode_pool.shutdown(wait=True)
