@@ -37,6 +37,13 @@ def _reset_observation(observation, arms):
     observation["id"] = 0
 
 
+def _extract_qpos(value):
+    """Return qpos as a flat array from a flat array or [{"qpos": [...]}]."""
+    if pa.types.is_struct(value.type):
+        return value.field("qpos")[0].values
+    return value
+
+
 def _decode_camera(encoded):
     image = cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)
     if image is None:
@@ -51,7 +58,8 @@ def _build_output(
 
     observation keys (all values are dora events with a "value" field):
       "arm_right"          – pa.array float32, len 8 (7 joints + 1 gripper)
-      "arm_left"           – pa.array float32, len 8
+                             or length-1 pa.StructArray {"qpos": list<float32>}
+      "arm_left"           – same as "arm_right"
       "camera_wrist_right" – JPEG-encoded uint8 flat array, 960×600
       "camera_wrist_left"  – JPEG-encoded uint8 flat array, 960×600
       "camera_head_left"   – JPEG-encoded uint8 flat array, 1280×720
@@ -76,9 +84,9 @@ def _build_output(
     names = []
     position_arrays = []
     if "arm_right" in observation:
-        position_arrays.append(observation["arm_right"]["value"])
+        position_arrays.append(_extract_qpos(observation["arm_right"]["value"]))
     if "arm_left" in observation:
-        position_arrays.append(observation["arm_left"]["value"])
+        position_arrays.append(_extract_qpos(observation["arm_left"]["value"]))
     arrays.append(
         pa.array(
             [pa.concat_arrays(position_arrays)], type=pa.list_(position_arrays[0].type)
