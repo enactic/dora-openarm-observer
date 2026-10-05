@@ -23,6 +23,15 @@ import pyarrow as pa
 import time
 
 
+_CAMERA_NAMES = (
+    "camera_wrist_right",
+    "camera_wrist_left",
+    "camera_head_right",
+    "camera_head_left",
+    "camera_ceiling",
+)
+
+
 def _reset_observation(observation, arms):
     """Initialize/reset observations to None and ID to 0."""
     if "right" in arms:
@@ -31,8 +40,8 @@ def _reset_observation(observation, arms):
     if "left" in arms:
         observation["arm_left"] = None
         observation["camera_wrist_left"] = None
-    observation["camera_head_left"] = None
     observation["camera_head_right"] = None
+    observation["camera_head_left"] = None
     observation["camera_ceiling"] = None
     observation["id"] = 0
 
@@ -62,8 +71,8 @@ def _build_output(
       "arm_left"           – same as "arm_right"
       "camera_wrist_right" – JPEG-encoded uint8 flat array, 960×600
       "camera_wrist_left"  – JPEG-encoded uint8 flat array, 960×600
-      "camera_head_left"   – JPEG-encoded uint8 flat array, 1280×720
       "camera_head_right"  – JPEG-encoded uint8 flat array, 1280×720
+      "camera_head_left"   – JPEG-encoded uint8 flat array, 1280×720
       "camera_ceiling"     – JPEG-encoded uint8 flat array, 960×600
       "id"                 – int64, incremented for each observation
 
@@ -71,12 +80,15 @@ def _build_output(
       "position"           – concatenated arm positions, list<float32>
       "camera_wrist_right" – decoded RGB flat array, list<uint8>
       "camera_wrist_left"  – decoded RGB flat array, list<uint8>
-      "camera_head_left"   – decoded RGB flat array, list<uint8>
       "camera_head_right"  – decoded RGB flat array, list<uint8>
+      "camera_head_left"   – decoded RGB flat array, list<uint8>
       "camera_ceiling"     – decoded RGB flat array, list<uint8>
       "phase_classifier_result" – StructArray or null
       "task_prompt"        – string (language instruction for the policy)
       "id"                 – int64, incremented for each observation
+
+    Users must not depend on the order of the camera fields. Access them by
+    name.
 
     metadata is mutated to add per-camera height/width/encoding keys.
     """
@@ -94,12 +106,7 @@ def _build_output(
     )
     names.append("position")
 
-    camera_names = []
-    if "camera_wrist_right" in observation:
-        camera_names.append("camera_wrist_right")
-    if "camera_wrist_left" in observation:
-        camera_names.append("camera_wrist_left")
-    camera_names.extend(["camera_head_left", "camera_head_right", "camera_ceiling"])
+    camera_names = [name for name in _CAMERA_NAMES if name in observation]
     decode_futures = {
         name: decode_pool.submit(
             _decode_camera,
