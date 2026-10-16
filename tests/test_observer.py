@@ -159,6 +159,34 @@ def test_parallel_decode_preserves_mainline_output_format():
     assert metadata["camera_ceiling.width"] == 3
 
 
+@pytest.mark.parametrize("ending", ["quit", "STOP"])
+def test_quit_exits_without_waiting_for_timer_close(monkeypatch, ending):
+    pools = []
+
+    class DecodePool(ThreadPoolExecutor):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            pools.append(self)
+
+        def shutdown(self, **kwargs):
+            self.shutdown_options = kwargs
+            super().shutdown(**kwargs)
+
+    def events():
+        if ending == "quit":
+            yield {"type": "INPUT", "id": "command", "value": pa.array(["quit"]), "metadata": {}}
+        else:
+            yield {"type": "STOP"}
+        raise AssertionError("Observer consumed another event after shutdown")
+
+    monkeypatch.setattr(observer.dora, "Node", events)
+    monkeypatch.setattr(observer, "ThreadPoolExecutor", DecodePool)
+    monkeypatch.setattr("sys.argv", ["observer"])
+    observer.main()
+    assert len(pools) == 1
+    assert pools[0].shutdown_options == {"wait": True}
+
+
 def test_qpos_accepts_canonical_payload():
     value = pa.array([{"qpos": [1.0, 2.0]}], type=QPOS_TYPE)
 

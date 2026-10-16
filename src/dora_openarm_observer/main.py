@@ -294,6 +294,8 @@ def main():
 
     try:
         for event in node:
+            if event["type"] == "STOP":
+                break
             if event["type"] != "INPUT":
                 continue
 
@@ -363,6 +365,8 @@ def main():
                     episode_attempt_id = None
                     policy_history.clear()
                     _reset_observation(observation, arms)
+                    if command == "quit":
+                        break
 
             elif event_id in arm_status:
                 status = event["value"][0].as_py()

@@ -35,6 +35,13 @@ are observer snapshot times in Unix nanoseconds, not sensor capture times.
 Each output row retains its snapshot's `id`; padded rows can repeat IDs/times.
 Position-only consumers use the output `position` field (right arm, then left).
 
+The `command` input accepts `quit` to end the observer and close its observation
+output, including while waiting for Start or arm readiness. Dora `STOP` also ends
+the loop. Both paths wait for the JPEG worker pool to finish. `stop` and
+`intervene` clear the episode but keep the node available for another Start.
+The tick input can therefore connect directly to a Dora timer, and consumers
+can subscribe directly to `observer/observation` without a quit relay.
+
 ## License
 
 Licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
