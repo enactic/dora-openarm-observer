@@ -158,7 +158,7 @@ def _list_array(rows, numpy_dtype, arrow_type):
     )
 
 
-def _build_output(snapshots, metadata):
+def _build_output(snapshots, metadata, *, state_snapshots=None):
     """Construct the final selected history as one Arrow struct array."""
     if not snapshots:
         raise ValueError("Cannot build output from empty history")
@@ -204,6 +204,20 @@ def _build_output(snapshots, metadata):
         pa.array([snapshot.observation_id for snapshot in snapshots], type=pa.int64())
     )
     names.append("id")
+    if state_snapshots is not None:
+        offsets = _parse_delta_indices(metadata["history_delta_indices"])
+        if len(offsets) != len(snapshots) or offsets.count(0) != 1:
+            raise ValueError("Independent state history requires exactly one current image row")
+        states = [np.asarray(snapshot.position, dtype=np.float32) for snapshot in state_snapshots]
+        dof = snapshots[offsets.index(0)].position.size
+        if not states or any(s.shape != (dof,) or not np.isfinite(s).all() for s in states):
+            raise ValueError("State history must contain finite, matching position vectors")
+        # An optional nested matrix lives only on the current image row. Legacy
+        # position/camera columns retain their original row count and semantics.
+        values = [None] * len(snapshots)
+        values[offsets.index(0)] = [s.tolist() for s in states]
+        arrays.append(pa.array(values, type=pa.list_(pa.list_(pa.float32()))))
+        names.append("state_history")
     return pa.StructArray.from_arrays(arrays, names)
 
 
@@ -261,6 +275,17 @@ def main():
         type=int,
         help="Persistent JPEG decode workers (default: 4)",
     )
+    parser.add_argument(
+        "--policy-state-history-delta-indices",
+        default=os.getenv("POLICY_STATE_HISTORY_DELTA_INDICES"),
+        help="Optional independent state offsets; omitted preserves the legacy observation schema",
+    )
+    parser.add_argument(
+        "--policy-state-history-hz",
+        default=os.getenv("POLICY_STATE_HISTORY_HZ"),
+        type=float,
+        help="Independent state history frequency; defaults to policy-history-hz",
+    )
     args = parser.parse_args()
 
     arms = args.arms.split(",")
@@ -272,9 +297,19 @@ def main():
         raise ValueError("--decode-workers must be positive")
 
     delta_indices = _parse_delta_indices(args.policy_history_delta_indices)
-    history_window_ns = int(
-        (abs(min(delta_indices)) / args.policy_history_hz + 0.1) * 1_000_000_000
-    )
+    state_delta_indices = None
+    state_history_hz = args.policy_history_hz if args.policy_state_history_hz is None else args.policy_state_history_hz
+    history_seconds = abs(min(delta_indices)) / args.policy_history_hz
+    if args.policy_state_history_delta_indices is not None:
+        state_delta_indices = _parse_delta_indices(args.policy_state_history_delta_indices)
+        if tuple(sorted(set(state_delta_indices))) != state_delta_indices or state_delta_indices[-1] != 0:
+            raise ValueError("Independent state history offsets must be unique, increasing, and end at zero")
+        if delta_indices.count(0) != 1:
+            raise ValueError("Independent state history requires exactly one current image row")
+        if not np.isfinite(state_history_hz) or state_history_hz <= 0:
+            raise ValueError("Independent state history frequency must be positive and finite")
+        history_seconds = max(history_seconds, abs(min(state_delta_indices)) / state_history_hz)
+    history_window_ns = int((history_seconds + 0.1) * 1_000_000_000)
 
     node = dora.Node()
     observation = {}
@@ -341,7 +376,17 @@ def main():
                     args.policy_history_hz,
                 )
                 metadata["history_timestamps"] = ",".join(map(str, history_timestamps))
-                output = _build_output(selected_snapshots, metadata)
+                state_snapshots = None
+                if state_delta_indices is not None:
+                    state_snapshots, state_timestamps = _select_history_items(
+                        policy_history, timestamp, state_delta_indices, state_history_hz,
+                    )
+                    metadata.update(
+                        state_history_delta_indices=",".join(map(str, state_delta_indices)),
+                        state_history_hz=state_history_hz,
+                        state_history_timestamps=",".join(map(str, state_timestamps)),
+                    )
+                output = _build_output(selected_snapshots, metadata, state_snapshots=state_snapshots)
                 node.send_output(
                     "observation",
                     output,

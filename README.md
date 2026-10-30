@@ -35,6 +35,31 @@ are observer snapshot times in Unix nanoseconds, not sensor capture times.
 Each output row retains its snapshot's `id`; padded rows can repeat IDs/times.
 Position-only consumers use the output `position` field (right arm, then left).
 
+### Independent State History
+
+An optional state history can use a different set of offsets from the image rows:
+
+```yaml
+args: "--policy-history-delta-indices=-24,-18,-12,-6,0 --policy-history-hz 30 --policy-state-history-delta-indices=-6,-5,-4,-3,-2,-1,0 --policy-state-history-hz 30"
+```
+
+The equivalent environment variables are `POLICY_STATE_HISTORY_DELTA_INDICES`
+and `POLICY_STATE_HISTORY_HZ`; the latter defaults to `POLICY_HISTORY_HZ`.
+When state offsets are omitted, the old schema and behavior are unchanged.
+Independent state offsets must be unique, increasing, non-positive and end at
+zero. The image offsets must contain exactly one current (`0`) row.
+
+The example still emits **five image rows** with the same five legacy `position`
+rows. An optional `state_history: list<list<float32>>` field holds the independent
+seven-by-DOF matrix only on the current image row; its other rows are null. No
+extra history images are serialized. Metadata adds `state_history_delta_indices`,
+`state_history_hz`, and `state_history_timestamps`, all using the same snapshot
+clock as image history. The shared snapshot buffer covers the longer of the two
+requested time windows, and both histories clear on episode lifecycle changes.
+Missing startup state samples repeat the current episode's earliest snapshot.
+Consumers that need dense state history must read the explicit field instead of
+assuming the legacy sparse `position` rows have changed meaning.
+
 The `command` input accepts `quit` to end the observer and close its observation
 output, including while waiting for Start or arm readiness. Dora `STOP` also ends
 the loop. Both paths wait for the JPEG worker pool to finish. `stop` and
