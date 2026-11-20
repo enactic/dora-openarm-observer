@@ -32,17 +32,36 @@ _CAMERA_NAMES = (
 )
 
 
-def _reset_observation(observation, arms):
-    """Initialize/reset observations to None and ID to 0."""
+_DEFAULT_CAMERAS = ",".join(name.removeprefix("camera_") for name in _CAMERA_NAMES)
+
+
+def _parse_cameras(cameras):
+    """Parse comma separated camera names such as "wrist_right,head_left".
+
+    An empty string means no camera.
+    """
+    names = [name for name in cameras.split(",") if name]
+    for name in names:
+        if f"camera_{name}" not in _CAMERA_NAMES:
+            raise argparse.ArgumentTypeError(
+                f"unknown camera: {name!r}: available cameras: {_DEFAULT_CAMERAS}"
+            )
+    return names
+
+
+def _reset_observation(observation, arms, cameras):
+    """Initialize/reset observations to None and ID to 0.
+
+    A wrist camera is used only when its arm is also used.
+    """
     if "right" in arms:
         observation["arm_right"] = None
-        observation["camera_wrist_right"] = None
     if "left" in arms:
         observation["arm_left"] = None
-        observation["camera_wrist_left"] = None
-    observation["camera_head_right"] = None
-    observation["camera_head_left"] = None
-    observation["camera_ceiling"] = None
+    for camera in cameras:
+        if camera.startswith("wrist_") and camera.removeprefix("wrist_") not in arms:
+            continue
+        observation[f"camera_{camera}"] = None
     observation["id"] = 0
 
 
@@ -75,6 +94,10 @@ def _build_output(
       "camera_head_left"   – JPEG-encoded uint8 flat array, 1280×720
       "camera_ceiling"     – JPEG-encoded uint8 flat array, 960×600
       "id"                 – int64, incremented for each observation
+
+    Only the used arms and cameras are in observation. For example, there is
+    no "camera_ceiling" for a robot without the ceiling camera. The output
+    has camera fields only for the cameras in observation.
 
     Output pa.StructArray fields:
       "position"           – concatenated arm positions, list<float32>
@@ -148,6 +171,16 @@ def main():
         type=str,
     )
     parser.add_argument(
+        "--cameras",
+        default=os.getenv("CAMERAS", _DEFAULT_CAMERAS),
+        help=(
+            f"The used cameras separated by comma (default: {_DEFAULT_CAMERAS}). "
+            "A wrist camera is used only when its arm is also used. "
+            "An empty string means no camera"
+        ),
+        type=_parse_cameras,
+    )
+    parser.add_argument(
         "--decode-workers",
         default=int(os.getenv("OBSERVER_DECODE_WORKERS", "4")),
         type=int,
@@ -160,7 +193,7 @@ def main():
     arms = args.arms.split(",")
     node = dora.Node()
     observation = {}
-    _reset_observation(observation, arms)
+    _reset_observation(observation, arms, args.cameras)
     cv2.setNumThreads(1)
     decode_pool = ThreadPoolExecutor(
         max_workers=args.decode_workers,
@@ -188,7 +221,7 @@ def main():
                     or ("left" in arms and last_arm_left_status == "stopped")
                     or command_status == "stop"
                 ):
-                    _reset_observation(observation, arms)
+                    _reset_observation(observation, arms, args.cameras)
                     continue
                 metadata = {
                     "episode_number": episode_number,
@@ -221,7 +254,7 @@ def main():
             elif event_id == "task_prompt":
                 last_task_prompt = event["value"][0].as_py()
             elif event_id != "id" and event_id in observation:
-                # Inputs for unused arms are ignored.
+                # Inputs for unused arms and cameras are ignored.
                 observation[event_id] = event
     finally:
         decode_pool.shutdown(wait=True)

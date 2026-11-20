@@ -14,13 +14,20 @@
 
 """Regression tests for parallel observer image decoding."""
 
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
 import pyarrow as pa
+import pytest
 
-from dora_openarm_observer.main import _build_output
+from dora_openarm_observer.main import (
+    _DEFAULT_CAMERAS,
+    _build_output,
+    _parse_cameras,
+    _reset_observation,
+)
 
 
 def _camera_event(value):
@@ -96,3 +103,76 @@ def test_struct_qpos_arm_observation():
 
     assert output.field("position").to_pylist() == [[1.0, 2.0, 3.0, 4.0]]
     assert output.field("position").type == pa.list_(pa.float32())
+
+
+def test_reset_observation_default_cameras():
+    """All cameras are used by default."""
+    observation = {}
+    cameras = _parse_cameras(_DEFAULT_CAMERAS)
+    _reset_observation(observation, ["right", "left"], cameras)
+
+    assert observation == {
+        "arm_right": None,
+        "arm_left": None,
+        "camera_wrist_right": None,
+        "camera_wrist_left": None,
+        "camera_head_right": None,
+        "camera_head_left": None,
+        "camera_ceiling": None,
+        "id": 0,
+    }
+
+
+def test_reset_observation_wrist_camera_of_unused_arm():
+    """A wrist camera of an unused arm isn't used."""
+    observation = {}
+    cameras = _parse_cameras("wrist_right,wrist_left,head_right")
+    _reset_observation(observation, ["right"], cameras)
+
+    assert observation == {
+        "arm_right": None,
+        "camera_wrist_right": None,
+        "camera_head_right": None,
+        "id": 0,
+    }
+
+
+def test_parse_cameras_empty():
+    """No camera is used with an empty string."""
+    assert _parse_cameras("") == []
+
+
+def test_parse_cameras_unknown():
+    """An unknown camera is rejected."""
+    with pytest.raises(argparse.ArgumentTypeError, match="unknown camera: 'cieling'"):
+        _parse_cameras("wrist_right,cieling")
+
+
+def test_build_output_without_ceiling_camera():
+    """The output has no field and metadata for an unused camera."""
+    observation = {
+        "arm_right": {"value": pa.array([1.0, 2.0], type=pa.float32())},
+        "arm_left": {"value": pa.array([3.0, 4.0], type=pa.float32())},
+        "camera_wrist_right": _camera_event(10),
+        "camera_wrist_left": _camera_event(20),
+        "camera_head_right": _camera_event(30),
+        "camera_head_left": _camera_event(40),
+        "id": 7,
+    }
+    metadata = {}
+
+    with ThreadPoolExecutor(max_workers=3) as decode_pool:
+        output = _build_output(observation, None, "pick", metadata, decode_pool)
+
+    assert output.type.names == [
+        "position",
+        "camera_wrist_right",
+        "camera_wrist_left",
+        "camera_head_right",
+        "camera_head_left",
+        "phase_classifier_result",
+        "task_prompt",
+        "id",
+    ]
+    assert not any(key.startswith("camera_ceiling.") for key in metadata)
+    assert metadata["camera_head_left.height"] == 2
