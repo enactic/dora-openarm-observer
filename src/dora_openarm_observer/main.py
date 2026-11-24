@@ -32,6 +32,11 @@ _CAMERA_NAMES = (
 )
 
 
+def _parse_arms(arms):
+    """Parse comma separated arms such as "right,left" and "right, left"."""
+    return [arm.strip() for arm in arms.split(",")]
+
+
 def _reset_observation(observation, arms):
     """Initialize/reset observations to None and ID to 0."""
     if "right" in arms:
@@ -144,8 +149,11 @@ def main():
     parser.add_argument(
         "--arms",
         default=os.getenv("ARMS", "right,left"),
-        help="The used arms: 'right,left' (default), 'right' or 'left'",
-        type=str,
+        help=(
+            "The used arms: 'right,left' (default), 'right' or 'left'. "
+            "Spaces around arms are ignored"
+        ),
+        type=_parse_arms,
     )
     parser.add_argument(
         "--decode-workers",
@@ -157,7 +165,7 @@ def main():
     if args.decode_workers <= 0:
         raise ValueError("--decode-workers must be positive")
 
-    arms = args.arms.split(",")
+    arms = args.arms
     node = dora.Node()
     observation = {}
     _reset_observation(observation, arms)

@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 import pyarrow as pa
 
-from dora_openarm_observer.main import _build_output
+from dora_openarm_observer.main import _build_output, _parse_arms
 
 
 def _camera_event(value):
@@ -96,3 +96,8 @@ def test_struct_qpos_arm_observation():
 
     assert output.field("position").to_pylist() == [[1.0, 2.0, 3.0, 4.0]]
     assert output.field("position").type == pa.list_(pa.float32())
+
+
+def test_parse_arms_spaces():
+    """Spaces around arms are ignored."""
+    assert _parse_arms("right, left") == ["right", "left"]
