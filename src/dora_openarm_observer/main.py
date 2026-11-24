@@ -37,17 +37,22 @@ def _parse_arms(arms):
     return [arm.strip() for arm in arms.split(",")]
 
 
-def _reset_observation(observation, arms):
-    """Initialize/reset observations to None and ID to 0."""
+def _reset_observation(observation, arms, cameras):
+    """Initialize/reset observations to None and ID to 0.
+
+    A wrist camera is used only when its arm is also used.
+    """
     if "right" in arms:
         observation["arm_right"] = None
-        observation["camera_wrist_right"] = None
     if "left" in arms:
         observation["arm_left"] = None
-        observation["camera_wrist_left"] = None
-    observation["camera_head_right"] = None
-    observation["camera_head_left"] = None
-    observation["camera_ceiling"] = None
+    for camera in cameras:
+        if (
+            camera.startswith("camera_wrist_")
+            and camera.removeprefix("camera_wrist_") not in arms
+        ):
+            continue
+        observation[camera] = None
     observation["id"] = 0
 
 
@@ -80,6 +85,10 @@ def _build_output(
       "camera_head_left"   – JPEG-encoded uint8 flat array, 1280×720
       "camera_ceiling"     – JPEG-encoded uint8 flat array, 960×600
       "id"                 – int64, incremented for each observation
+
+    Only the used arms and cameras are in observation. For example, there is
+    no "camera_ceiling" for a robot without the ceiling camera. The output
+    has camera fields only for the cameras in observation.
 
     Output pa.StructArray fields:
       "position"           – concatenated arm positions, list<float32>
@@ -167,8 +176,11 @@ def main():
 
     arms = args.arms
     node = dora.Node()
+    # The connected camera_* inputs are the used cameras.
+    inputs = node.node_config()["inputs"]
+    cameras = [name for name in _CAMERA_NAMES if name in inputs]
     observation = {}
-    _reset_observation(observation, arms)
+    _reset_observation(observation, arms, cameras)
     cv2.setNumThreads(1)
     decode_pool = ThreadPoolExecutor(
         max_workers=args.decode_workers,
@@ -196,7 +208,7 @@ def main():
                     or ("left" in arms and last_arm_left_status == "stopped")
                     or command_status == "stop"
                 ):
-                    _reset_observation(observation, arms)
+                    _reset_observation(observation, arms, cameras)
                     continue
                 metadata = {
                     "episode_number": episode_number,
@@ -229,7 +241,7 @@ def main():
             elif event_id == "task_prompt":
                 last_task_prompt = event["value"][0].as_py()
             elif event_id != "id" and event_id in observation:
-                # Inputs for unused arms are ignored.
+                # Inputs for unused arms and cameras are ignored.
                 observation[event_id] = event
     finally:
         decode_pool.shutdown(wait=True)

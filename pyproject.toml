@@ -21,7 +21,7 @@ license = { text = "Apache-2.0" }
 readme = "README.md"
 requires-python = ">=3.10"
 
-dependencies = ["dora-rs >= 0.3.9", "opencv-python"]
+dependencies = ["dora-rs >= 0.3.13", "opencv-python"]
 
 [dependency-groups]
 dev = [
