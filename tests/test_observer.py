@@ -20,7 +20,12 @@ import cv2
 import numpy as np
 import pyarrow as pa
 
-from dora_openarm_observer.main import _build_output, _parse_arms
+from dora_openarm_observer.main import (
+    _CAMERA_NAMES,
+    _build_output,
+    _parse_arms,
+    _reset_observation,
+)
 
 
 def _camera_event(value):
@@ -101,3 +106,64 @@ def test_struct_qpos_arm_observation():
 def test_parse_arms_spaces():
     """Spaces around arms are ignored."""
     assert _parse_arms("right, left") == ["right", "left"]
+
+
+def test_reset_observation_all_cameras():
+    """All cameras are waited for when all of them are used."""
+    observation = {}
+    _reset_observation(observation, ["right", "left"], _CAMERA_NAMES)
+
+    assert observation == {
+        "arm_right": None,
+        "arm_left": None,
+        "camera_wrist_right": None,
+        "camera_wrist_left": None,
+        "camera_head_right": None,
+        "camera_head_left": None,
+        "camera_ceiling": None,
+        "id": 0,
+    }
+
+
+def test_reset_observation_wrist_camera_of_unused_arm():
+    """A wrist camera of an unused arm isn't used."""
+    observation = {}
+    cameras = ["camera_wrist_right", "camera_wrist_left", "camera_head_right"]
+    _reset_observation(observation, ["right"], cameras)
+
+    assert observation == {
+        "arm_right": None,
+        "camera_wrist_right": None,
+        "camera_head_right": None,
+        "id": 0,
+    }
+
+
+def test_build_output_without_ceiling_camera():
+    """The output has no field and metadata for an unused camera."""
+    observation = {
+        "arm_right": {"value": pa.array([1.0, 2.0], type=pa.float32())},
+        "arm_left": {"value": pa.array([3.0, 4.0], type=pa.float32())},
+        "camera_wrist_right": _camera_event(10),
+        "camera_wrist_left": _camera_event(20),
+        "camera_head_right": _camera_event(30),
+        "camera_head_left": _camera_event(40),
+        "id": 7,
+    }
+    metadata = {}
+
+    with ThreadPoolExecutor(max_workers=3) as decode_pool:
+        output = _build_output(observation, None, "pick", metadata, decode_pool)
+
+    assert output.type.names == [
+        "position",
+        "camera_wrist_right",
+        "camera_wrist_left",
+        "camera_head_right",
+        "camera_head_left",
+        "phase_classifier_result",
+        "task_prompt",
+        "id",
+    ]
+    assert not any(key.startswith("camera_ceiling.") for key in metadata)
+    assert metadata["camera_head_left.height"] == 2
